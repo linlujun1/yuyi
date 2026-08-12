@@ -1,0 +1,104 @@
+# 实验模型注册表 — 新增/修改模型只需编辑本文件
+#
+# 字段说明:
+#   endpoint     默认 LLMRouter 调用参数；MindIE 实际端口以 config/mindie/runtime/<tmodel>.json 为准
+#   mindie       非 null 表示需用 scripts/mindie/start.sh 拉起；null 表示纯云端/API
+#     world_size / min_free_hbm_mb  自动选卡依据（不写死物理卡号与端口）
+
+models:
+  r132B:
+    display_name: DeepSeek-R1-Distill-Qwen-32B
+    weight_path: /user_home/linlujun/linlujun/model/DeepSeek-R1-Distill-Qwen-32B
+    endpoint:
+      # 占位；启动后由 runtime 覆盖为自动分配端口
+      base_url: http://127.0.0.1:0/v1
+      model: qwen
+      api_key: EMPTY
+    mindie:
+      world_size: 2
+      # 实测双卡加载后约占用 ~52GB HBM/卡，要求启动前每卡至少剩这么多空闲
+      min_free_hbm_mb: 52000
+      max_aicore_pct: 5
+      max_process_mem_mb: 512
+      service_model_name: qwen
+      log_file: /tmp/mindieservice_r132B.log
+      max_seq_len: 4096
+      max_input_token_len: 2048
+      max_batch_size: 8
+
+  r17B:
+    display_name: DeepSeek-R1-Distill-Qwen-7B
+    weight_path: /user_home/linlujun/linlujun/model/DeepSeek-R1-Distill-Qwen-7B
+    endpoint:
+      base_url: http://127.0.0.1:0/v1
+      model: qwen
+      api_key: EMPTY
+    mindie:
+      world_size: 1
+      min_free_hbm_mb: 20000
+      max_aicore_pct: 5
+      max_process_mem_mb: 512
+      service_model_name: qwen
+      log_file: /tmp/mindieservice_r17B.log
+      max_seq_len: 4096
+      max_input_token_len: 2048
+      max_batch_size: 16
+
+  r170B:
+    display_name: DeepSeek-R1-Distill-Llama-70B
+    weight_path: /user_home/linlujun/linlujun/model/DeepSeek-R1-Distill-Llama-70B
+    endpoint:
+      base_url: http://127.0.0.1:0/v1
+      model: llama
+      api_key: EMPTY
+    mindie:
+      world_size: 4
+      min_free_hbm_mb: 52000
+      max_aicore_pct: 5
+      max_process_mem_mb: 512
+      service_model_name: llama
+      log_file: /tmp/mindieservice_r170B.log
+      max_seq_len: 4096
+      max_input_token_len: 2048
+      max_batch_size: 4
+
+  r18B:
+    display_name: DeepSeek-R1-Distill-Llama-8B
+    weight_path: /user_home/linlujun/linlujun/model/DeepSeek-R1-Distill-Llama-8B
+    endpoint:
+      base_url: http://127.0.0.1:18200/v1
+      model: llama
+      api_key: EMPTY
+    mindie: null
+
+  gpt4o-mini:
+    display_name: GPT-4o-mini (cloud judge)
+    endpoint:
+      base_url: https://api.openai.com/v1
+      model: gpt-4o-mini
+      api_key: ${OPENAI_API_KEY}
+    mindie: null
+
+  gpt4o:
+    display_name: GPT-4o (cloud)
+    endpoint:
+      base_url: https://api.openai.com/v1
+      model: gpt-4o
+      api_key: ${OPENAI_API_KEY}
+    mindie: null
+
+baselines:
+  multi_agent:
+    roles:
+      planner: gpt4o-mini
+      writer: r132B
+      critic: gpt4o-mini
+
+experiments:
+  - baseline: direct
+    tmodel: r132B
+  - baseline: direct
+    tmodel: r17B
+  - baseline: direct
+    tmodel: r170B
+  - baseline: multi_agent

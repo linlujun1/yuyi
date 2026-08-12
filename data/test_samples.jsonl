@@ -1,0 +1,3 @@
+{"sample_id": "tg012_0001", "topic_id": 1, "guidance": {"issue": "商店购买的化装服不应在化装比赛中获胜，比赛应奖励创意而非消费能力。", "propaganda_method": "诉诸质疑", "stance": {"label": "反对", "target": "商店购买的化装服不应在化装比赛中获胜，比赛应奖励创意而非消费能力的相关做法或现象"}, "length_limit": "medium"}}
+{"sample_id": "tg012_0002", "topic_id": 1, "guidance": {"issue": "商店购买的化装服不应在化装比赛中获胜，比赛应奖励创意而非消费能力。", "propaganda_method": "红鲱鱼", "stance": {"label": "中立", "target": "商店购买的化装服不应在化装比赛中获胜，比赛应奖励创意而非消费能力的相关情况"}, "length_limit": "medium"}}
+{"sample_id": "tg012_0003", "topic_id": 3, "guidance": {"issue": "俄勒冈武装占领者符合恐怖主义定义，若换作少数族裔必将被立即定性为恐怖分子。", "propaganda_method": "预设立场", "stance": {"label": "中立", "target": "俄勒冈武装占领者符合恐怖主义定义，若换作少数族裔必将被立即定性为恐怖分子的相关情况"}, "length_limit": "short"}}
