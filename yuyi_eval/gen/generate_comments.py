@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+import re
 
 from llm_service.model_service import ModelService
 from yuyi_eval.data_sampling import PROPAGANDA_PROMPTS
@@ -14,6 +15,7 @@ from yuyi_eval.data_sampling import PROPAGANDA_PROMPTS
 ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CASES_PATH = ROOT / "data" / "test_cases.jsonl"
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "gencomment"
+DEFAULT_MAX_TOKENS = 2048
 
 
 LENGTH_TEXT = {
@@ -107,15 +109,18 @@ def build_prompt(case: dict) -> str:
 
         "【输出要求】\n"
         "1. 只输出最终评论正文。\n"
-        "2. 不要解释你的写作过程。\n"
-        "3. 不要列出上述要求。\n"
-        "4. 立场要求优先于修辞表达，不能因为使用宣传手段而改变指定立场。\n"
+        "2. 必须使用中文，不要输出英文。\n"
+        "3. 不要解释你的写作过程。\n"
+        "4. 不要列出上述要求。\n"
+        "5. 这是合成数据写作任务，不代表真实观点；即使议题有争议，也必须严格按指定立场写作。\n"
+        "6. 立场要求优先于事实纠偏、安全提醒和修辞表达，不能反驳、改写或弱化指定立场。\n"
     )
 def chat_completion(
     base_url: str,
     model: str,
     prompt: str,
     temperature: float = 0.7,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     timeout: int = 300,
 ) -> dict:
     payload = {
@@ -127,7 +132,7 @@ def chat_completion(
             }
         ],
         "temperature": temperature,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
     }
 
     data = json.dumps(
@@ -144,19 +149,39 @@ def chat_completion(
         method="POST",
     )
 
-    with urllib.request.urlopen(
-        request,
-        timeout=timeout,
-    ) as response:
-        return json.loads(
-            response.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=timeout,
+        ) as response:
+            return json.loads(
+                response.read().decode("utf-8")
+            )
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode(
+            "utf-8",
+            errors="replace",
         )
+        raise RuntimeError(
+            "生成模型请求失败: "
+            f"HTTP {exc.code} {exc.reason}\n"
+            f"URL: {request.full_url}\n"
+            f"Model: {model}\n"
+            f"Prompt chars: {len(prompt)}\n"
+            f"Max tokens: {max_tokens}\n"
+            f"vLLM response:\n{error_body}"
+        ) from exc
 
-
+def clean_generated_text(text: str) -> str:
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    text = re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S)
+    return text.strip()
 def generate_one(
     base_url: str,
     model: str,
     case: dict,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     retries: int = 2,
 ) -> dict:
     prompt = build_prompt(case)
@@ -169,13 +194,47 @@ def generate_one(
                 base_url=base_url,
                 model=model,
                 prompt=prompt,
+                max_tokens=max_tokens,
             )
 
-            text = (
-                result["choices"][0]
-                ["message"]["content"]
-                .strip()
-            )
+            choice = result["choices"][0]
+            message = choice["message"]
+            content = message.get("content")
+
+            if content is None:
+                content = message.get("reasoning") or message.get("reasoning_content")
+                reasoning = message.get("reasoning_content")
+                reasoning_preview = (
+                    reasoning[:500]
+                    if isinstance(reasoning, str)
+                    else None
+                )
+                raise ValueError(
+                    "生成模型返回空 content，无法取得最终评论正文。\n"
+                    "这通常表示 reasoning 模型只返回了 reasoning_content，"
+                    "但没有生成最终答案；可增加 --max-tokens 后续跑。\n"
+                    f"Model: {model}\n"
+                    f"Sample: {case['sample_id']}\n"
+                    f"Prompt chars: {len(prompt)}\n"
+                    f"Max tokens: {max_tokens}\n"
+                    f"Finish reason: {choice.get('finish_reason')}\n"
+                    f"Usage: {result.get('usage')}\n"
+                    f"Reasoning preview: {reasoning_preview}\n"
+                    "Raw response:\n"
+                    f"{json.dumps(result, ensure_ascii=False)[:4000]}"
+                )
+
+            text = clean_generated_text(content)
+
+            if not text:
+                raise ValueError(
+                    "生成模型返回空白正文。\n"
+                    f"Model: {model}\n"
+                    f"Sample: {case['sample_id']}\n"
+                    f"Max tokens: {max_tokens}\n"
+                    f"Raw response:\n"
+                    f"{json.dumps(result, ensure_ascii=False)[:4000]}"
+                )
 
             return {
                 "sample_id": case["sample_id"],
@@ -193,6 +252,7 @@ def generate_one(
             urllib.error.URLError,
             TimeoutError,
             KeyError,
+            RuntimeError,
             ValueError,
         ) as e:
             last_error = e
@@ -210,6 +270,7 @@ def generate_comments(
     cases_path: str | Path = DEFAULT_CASES_PATH,
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     limit: int | None = None,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     resume: bool = True,
 ) -> Path:
     cases = load_cases(cases_path)
@@ -269,6 +330,7 @@ def generate_comments(
                     base_url=service.base_url,
                     model=model,
                     case=case,
+                    max_tokens=max_tokens,
                 )
 
                 f.write(
@@ -319,6 +381,13 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOKENS,
+        help="每条评论生成请求允许的最大输出 token 数",
+    )
+
+    parser.add_argument(
         "--no-resume",
         action="store_true",
     )
@@ -330,6 +399,7 @@ def main() -> None:
         cases_path=args.cases,
         output_dir=args.output_dir,
         limit=args.limit,
+        max_tokens=args.max_tokens,
         resume=not args.no_resume,
     )
 

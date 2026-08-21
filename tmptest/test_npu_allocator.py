@@ -50,11 +50,11 @@ class NPUAllocatorTests(unittest.TestCase):
 
         self.assertEqual(
             ms.required_free_hbm_mb(model, npu, model.runtime_profiles[0]),
-            53248,
+            33588,
         )
         self.assertEqual(
             ms.required_free_hbm_mb(model, npu, model.runtime_profiles[-1]),
-            43418,
+            27034,
         )
 
     def test_same_pix_group_wins_before_more_free_cross_group(self) -> None:
@@ -103,7 +103,10 @@ class NPUAllocatorTests(unittest.TestCase):
             model_name="DeepSeek-R1-Distill-Qwen-14B",
             model=model,
             parallel_plan=model.parallel_plans[0],
-            selected_npus=[ms.NPUInfo(7, 65536, 0, 0)],
+            selected_npus=[
+                ms.NPUInfo(7, 65536, 0, 0),
+                ms.NPUInfo(8, 65536, 0, 0),
+            ],
             port=18000,
             container_name="test-container",
             profile=profile,
@@ -112,8 +115,13 @@ class NPUAllocatorTests(unittest.TestCase):
 
         utilization_index = command.index("--gpu-memory-utilization")
         context_index = command.index("--max-model-len")
-        self.assertEqual(command[utilization_index + 1], "0.6")
-        self.assertEqual(command[context_index + 1], "3072")
+        seq_index = command.index("--max-num-seqs")
+        tp_index = command.index("--tensor-parallel-size")
+        self.assertEqual(command[tp_index + 1], "2")
+        self.assertEqual(command[utilization_index + 1], "0.35")
+        self.assertEqual(command[context_index + 1], "2048")
+        self.assertEqual(command[seq_index + 1], "1")
+        self.assertIn("--enforce-eager", command)
 
     def test_emergency_profile_enables_eager_single_sequence(self) -> None:
         model = ms.MODELS["DeepSeek-R1-Distill-Qwen-32B"]
@@ -138,6 +146,57 @@ class NPUAllocatorTests(unittest.TestCase):
         context_index = command.index("--max-model-len")
         self.assertEqual(command[seq_index + 1], "1")
         self.assertEqual(command[context_index + 1], "2048")
+
+    def test_small_evaluator_models_are_single_card_eager(self) -> None:
+        for model_name in (
+            "Qwen2.5-1.5B-Instruct",
+            "Qwen2.5-0.5B-Instruct",
+        ):
+            model = ms.MODELS[model_name]
+            profile = model.runtime_profiles[0]
+
+            self.assertEqual(model.num_npus, 1)
+            self.assertEqual(profile.max_model_len, 2048)
+            self.assertEqual(profile.max_num_seqs, 1)
+            self.assertTrue(profile.enforce_eager)
+
+            command = ms.build_docker_command(
+                model_name=model_name,
+                model=model,
+                parallel_plan=model.parallel_plans[0],
+                selected_npus=[ms.NPUInfo(7, 65536, 0, 0)],
+                port=18000,
+                container_name="test-container",
+                profile=profile,
+                lease_token="test-token",
+            )
+
+            self.assertIn("--enforce-eager", command)
+            self.assertIn("--max-num-seqs", command)
+            self.assertIn("--max-num-batched-tokens", command)
+
+    def test_startup_logs_are_compacted_and_classified(self) -> None:
+        logs = "\n".join(
+            [
+                "(EngineCore pid=278) noise",
+                "rtsMallocHost execution failed, reason=driver error:out of memory",
+                "[FUNC:ReportCallError][FILE:log_inner.cpp][LINE:148]",
+                "Traceback (most recent call last):",
+            ]
+        )
+
+        failure_type, hint = ms.classify_startup_failure(logs)
+        compact = ms.compact_startup_logs(logs)
+
+        self.assertEqual(failure_type, "host_memory_oom")
+        self.assertIn("host memory", hint)
+        self.assertTrue(compact[0].startswith("... 已隐藏"))
+        self.assertTrue(
+            any("rtsMallocHost" in line for line in compact)
+        )
+        self.assertTrue(
+            any("Traceback" in line for line in compact)
+        )
 
     def test_memory_startup_failure_retries_next_profile(self) -> None:
         service = ms.ModelService(
@@ -166,12 +225,17 @@ class NPUAllocatorTests(unittest.TestCase):
                 "get_container_logs",
                 return_value="Free memory on device is less than desired",
             ),
+            mock.patch.object(
+                ms,
+                "save_startup_error_log",
+                return_value=Path("/tmp/error.log"),
+            ),
             mock.patch.object(service, "stop"),
         ):
             base_url = service.start()
 
         self.assertEqual(base_url, "http://127.0.0.1:18001/v1")
-        self.assertEqual(service.runtime_profile.name, "balanced")
+        self.assertEqual(service.runtime_profile.name, "tp2_low_eager")
         self.assertEqual(launch.call_count, 2)
 
     def test_32b_uses_2_3_4_5_8_card_plans(self) -> None:
@@ -240,6 +304,29 @@ class NPUAllocatorTests(unittest.TestCase):
             tp4,
         )
         self.assertEqual(required, 27034)
+
+    def test_14b_models_use_tp2_conservative_profiles(self) -> None:
+        for model_name in (
+            "Qwen2.5-14B-Instruct",
+            "DeepSeek-R1-Distill-Qwen-14B",
+        ):
+            model = ms.MODELS[model_name]
+            plan = model.parallel_plans[0]
+
+            self.assertEqual(plan.tp, 2)
+            self.assertEqual(plan.pp, 1)
+            self.assertEqual(plan.num_npus, 2)
+            self.assertTrue(
+                all(profile.enforce_eager for profile in plan.runtime_profiles)
+            )
+            self.assertEqual(
+                [profile.name for profile in plan.runtime_profiles],
+                [
+                    "tp2_safe_eager",
+                    "tp2_low_eager",
+                    "tp2_emergency_eager",
+                ],
+            )
 
     def test_only_requested_card_counts_are_allowed(self) -> None:
         with self.assertRaises(ValueError):
@@ -435,6 +522,11 @@ class NPUAllocatorTests(unittest.TestCase):
                 "get_container_logs",
                 return_value="No available memory for the cache blocks",
             ),
+            mock.patch.object(
+                ms,
+                "save_startup_error_log",
+                return_value=Path("/tmp/error.log"),
+            ),
             mock.patch.object(service, "stop"),
         ):
             base_url = service.start()
@@ -486,13 +578,18 @@ class NPUAllocatorTests(unittest.TestCase):
                     "pipeline parallel is not supported",
                 ],
             ),
+            mock.patch.object(
+                ms,
+                "save_startup_error_log",
+                return_value=Path("/tmp/error.log"),
+            ),
             mock.patch.object(service, "stop"),
         ):
             base_url = service.start()
 
         self.assertEqual(base_url, "http://127.0.0.1:18002/v1")
         self.assertEqual(service.parallel_plan.name, "tp4")
-        self.assertEqual(service.runtime_profile.name, "tp4_safe")
+        self.assertEqual(service.runtime_profile.name, "tp4_safe_eager")
         self.assertEqual(launch.call_count, 3)
 
     def test_shorter_context_is_tried_for_kv_capacity_error(self) -> None:

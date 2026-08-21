@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -13,6 +14,12 @@ EVAL_METHODS = [
     "direct_llm",
     "multi_agent",
 ]
+SMALL_EVALUATOR_MAX_TOKENS = 128
+DEFAULT_EVALUATOR_MAX_TOKENS = 1024
+SMALL_EVALUATORS = {
+    "Qwen2.5-1.5B-Instruct",
+    "Qwen2.5-0.5B-Instruct",
+}
 
 def load_jsonl(path: Path) -> list[dict]:
     records = []
@@ -156,6 +163,7 @@ def chat_completion(
     model: str,
     prompt: str,
 ) -> tuple[str, dict]:
+    max_tokens = evaluator_max_tokens(model)
     body = {
         "model": model,
         "messages": [
@@ -165,7 +173,7 @@ def chat_completion(
             }
         ],
         "temperature": 0,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
     }
 
     request = urllib.request.Request(
@@ -180,19 +188,82 @@ def chat_completion(
         method="POST",
     )
 
-    with urllib.request.urlopen(
-        request,
-        timeout=300,
-    ) as response:
-        result = json.loads(
-            response.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=300,
+        ) as response:
+            result = json.loads(
+                response.read().decode("utf-8")
+            )
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode(
+            "utf-8",
+            errors="replace",
+        )
+        raise RuntimeError(
+            "评价模型请求失败: "
+            f"HTTP {exc.code} {exc.reason}\n"
+            f"URL: {request.full_url}\n"
+            f"Evaluator: {model}\n"
+            f"Prompt chars: {len(prompt)}\n"
+            f"Max tokens: {max_tokens}\n"
+            f"vLLM response:\n{error_body}"
+        ) from exc
+
+    message = result["choices"][0]["message"]
+    content = message.get("content")
+
+    if content is None:
+        raise RuntimeError(
+            "评价模型返回空 content，无法解析评分 JSON。\n"
+            "这通常表示 reasoning 模型只返回了 reasoning_content，"
+            "但没有生成最终答案；可增加 max_tokens 或换用非 reasoning evaluator。\n"
+            f"Evaluator: {model}\n"
+            f"Prompt chars: {len(prompt)}\n"
+            f"Max tokens: {max_tokens}\n"
+            f"Raw response:\n"
+            f"{json.dumps(result, ensure_ascii=False)[:4000]}"
         )
 
-    content = (
-        result["choices"][0]["message"]["content"]
-    )
-
     return content, result.get("usage", {})
+
+
+def evaluator_max_tokens(model: str) -> int:
+    if model in SMALL_EVALUATORS:
+        return SMALL_EVALUATOR_MAX_TOKENS
+
+    return DEFAULT_EVALUATOR_MAX_TOKENS
+
+
+def build_output_paths(
+    method: str,
+    source_model: str,
+    evaluator: str,
+    mode: str,
+) -> tuple[Path, Path | None]:
+    output_dir = Path("data/evaluation")
+
+    if method == "multi_agent":
+        detail_dir = Path("data/evaluation_details")
+        return (
+            output_dir / (
+                f"multi_agent_final_scores_{source_model}_"
+                f"by_{evaluator}_{mode}.jsonl"
+            ),
+            detail_dir / (
+                f"multi_agent_role_details_{source_model}_"
+                f"by_{evaluator}_{mode}.jsonl"
+            ),
+        )
+
+    return (
+        output_dir / (
+            f"{method}_{source_model}_"
+            f"by_{evaluator}_{mode}.jsonl"
+        ),
+        None,
+    )
 
 
 def parse_scores(text: str) -> dict:
@@ -589,35 +660,22 @@ def evaluate_comments(
         else "no_target"
     )
 
-    output_dir = Path(
-        "data/evaluation"
+    output_path, multi_path = build_output_paths(
+        method=method,
+        source_model=source_model,
+        evaluator=evaluator,
+        mode=mode,
     )
 
-    output_dir.mkdir(
+    output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    output_path = output_dir / (
-        f"{method}_{source_model}_"
-        f"by_{evaluator}_{mode}.jsonl"
-    )
-
-    multi_path = None
-
-    if method == "multi_agent":
-        multi_dir = Path(
-            "data/muti"
-        )
-
-        multi_dir.mkdir(
+    if multi_path is not None:
+        multi_path.parent.mkdir(
             parents=True,
             exist_ok=True,
-        )
-
-        multi_path = multi_dir / (
-            f"multi_agent_roles_{source_model}_"
-            f"by_{evaluator}_{mode}.jsonl"
         )
 
     done = load_done(
@@ -649,12 +707,12 @@ def evaluate_comments(
         f"待评估: {len(pending)}"
     )
     print(
-        f"输出: {output_path.resolve()}"
+        f"最终分数文件: {output_path.resolve()}"
     )
 
-    if method == "multi_agent":
+    if multi_path is not None:
         print(
-            f"角色结果: {multi_path.resolve()}"
+            f"角色细节文件: {multi_path.resolve()}"
         )
 
     if not pending:
@@ -762,9 +820,14 @@ def evaluate_comments(
     print()
     print("评估完成")
     print(
-        f"结果文件: "
+        f"最终分数文件: "
         f"{output_path.resolve()}"
     )
+    if multi_path is not None:
+        print(
+            f"角色细节文件: "
+            f"{multi_path.resolve()}"
+        )
 
     return output_path
 

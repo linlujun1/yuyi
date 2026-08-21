@@ -32,6 +32,7 @@ NPU_WAIT_POLL_SECONDS = 5
 
 ALLOCATOR_LOCK_PATH = Path("/tmp/linlujun-yuyi-npu/allocator.lock")
 LEASE_DIR = ALLOCATOR_LOCK_PATH.parent / "leases"
+ERROR_LOG_DIR = Path("logs")
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,69 @@ EMERGENCY_PROFILE = RuntimeProfile(
     max_model_len=3072,
     max_num_seqs=4,
     max_num_batched_tokens=2048,
+)
+
+LARGE_SAFE_PROFILE = RuntimeProfile(
+    name="large_safe_eager",
+    gpu_memory_utilization=0.50,
+    max_model_len=4096,
+    max_num_seqs=4,
+    max_num_batched_tokens=2048,
+    enforce_eager=True,
+)
+
+LARGE_LOW_PROFILE = RuntimeProfile(
+    name="large_low_eager",
+    gpu_memory_utilization=0.40,
+    max_model_len=3072,
+    max_num_seqs=2,
+    max_num_batched_tokens=1536,
+    enforce_eager=True,
+)
+
+LARGE_EMERGENCY_PROFILE = RuntimeProfile(
+    name="large_emergency_eager",
+    gpu_memory_utilization=0.30,
+    max_model_len=2048,
+    max_num_seqs=1,
+    max_num_batched_tokens=1024,
+    enforce_eager=True,
+)
+
+SMALL_EVAL_PROFILE = RuntimeProfile(
+    name="small_eval_eager",
+    gpu_memory_utilization=0.25,
+    max_model_len=2048,
+    max_num_seqs=1,
+    max_num_batched_tokens=1024,
+    enforce_eager=True,
+)
+
+SMALL_EVAL_LOW_PROFILE = RuntimeProfile(
+    name="small_eval_low_eager",
+    gpu_memory_utilization=0.20,
+    max_model_len=1536,
+    max_num_seqs=1,
+    max_num_batched_tokens=768,
+    enforce_eager=True,
+)
+
+TINY_EVAL_PROFILE = RuntimeProfile(
+    name="tiny_eval_eager",
+    gpu_memory_utilization=0.20,
+    max_model_len=2048,
+    max_num_seqs=1,
+    max_num_batched_tokens=1024,
+    enforce_eager=True,
+)
+
+TINY_EVAL_LOW_PROFILE = RuntimeProfile(
+    name="tiny_eval_low_eager",
+    gpu_memory_utilization=0.15,
+    max_model_len=1536,
+    max_num_seqs=1,
+    max_num_batched_tokens=768,
+    enforce_eager=True,
 )
 
 
@@ -146,16 +210,58 @@ class ModelConfig:
 
 
 MODELS = {
-    "Qwen2.5-14B-Instruct": ModelConfig(
-        path="/user_home/linlujun/linlujun/model/Qwen2.5-14B-Instruct",
+    "Qwen2.5-1.5B-Instruct": ModelConfig(
+        path="/user_home/linlujun/linlujun/model/Qwen2.5-1.5B-Instruct",
         tp=1,
         pp=1,
-        min_free_hbm_mb=40000,
+        min_free_hbm_mb=8000,
         runtime_profiles=(
-            NORMAL_PROFILE,
-            RuntimeProfile("balanced", 0.70, 4096, 8, 4096),
-            LOW_MEMORY_PROFILE,
-            EMERGENCY_PROFILE,
+            SMALL_EVAL_PROFILE,
+            SMALL_EVAL_LOW_PROFILE,
+        ),
+    ),
+
+    "Qwen2.5-0.5B-Instruct": ModelConfig(
+        path="/user_home/linlujun/linlujun/model/Qwen2.5-0.5B-Instruct",
+        tp=1,
+        pp=1,
+        min_free_hbm_mb=6000,
+        runtime_profiles=(
+            TINY_EVAL_PROFILE,
+            TINY_EVAL_LOW_PROFILE,
+        ),
+    ),
+
+    "Qwen2.5-14B-Instruct": ModelConfig(
+        path="/user_home/linlujun/linlujun/model/Qwen2.5-14B-Instruct",
+        tp=2,
+        pp=1,
+        min_free_hbm_mb=18000,
+        runtime_profiles=(
+            RuntimeProfile(
+                "tp2_safe_eager",
+                0.45,
+                4096,
+                4,
+                2048,
+                enforce_eager=True,
+            ),
+            RuntimeProfile(
+                "tp2_low_eager",
+                0.40,
+                3072,
+                2,
+                1536,
+                enforce_eager=True,
+            ),
+            RuntimeProfile(
+                "tp2_emergency_eager",
+                0.35,
+                2048,
+                1,
+                1024,
+                enforce_eager=True,
+            ),
         ),
     ),
 
@@ -163,26 +269,60 @@ MODELS = {
         path="/user_home/linlujun/linlujun/model/DeepSeek-R1-Distill-Llama-8B",
         tp=1,
         pp=1,
-        min_free_hbm_mb=30000,
+        min_free_hbm_mb=20000,
         reasoning_parser="deepseek_r1",
         runtime_profiles=(
-            NORMAL_PROFILE,
-            LOW_MEMORY_PROFILE,
-            RuntimeProfile("emergency", 0.55, 3072, 4, 2048),
+            RuntimeProfile(
+                "eval_safe_eager",
+                0.40,
+                3072,
+                2,
+                1536,
+                enforce_eager=True,
+            ),
+            RuntimeProfile(
+                "eval_low_eager",
+                0.35,
+                2048,
+                1,
+                1024,
+                enforce_eager=True,
+            ),
+            LARGE_EMERGENCY_PROFILE,
         ),
     ),
 
     "DeepSeek-R1-Distill-Qwen-14B": ModelConfig(
         path="/user_home/linlujun/linlujun/model/DeepSeek-R1-Distill-Qwen-14B",
-        tp=1,
+        tp=2,
         pp=1,
-        min_free_hbm_mb=40000,
+        min_free_hbm_mb=18000,
         reasoning_parser="deepseek_r1",
         runtime_profiles=(
-            NORMAL_PROFILE,
-            RuntimeProfile("balanced", 0.70, 4096, 8, 4096),
-            LOW_MEMORY_PROFILE,
-            EMERGENCY_PROFILE,
+            RuntimeProfile(
+                "tp2_safe_eager",
+                0.45,
+                4096,
+                4,
+                2048,
+                enforce_eager=True,
+            ),
+            RuntimeProfile(
+                "tp2_low_eager",
+                0.40,
+                3072,
+                2,
+                1536,
+                enforce_eager=True,
+            ),
+            RuntimeProfile(
+                "tp2_emergency_eager",
+                0.35,
+                2048,
+                1,
+                1024,
+                enforce_eager=True,
+            ),
         ),
     ),
 
@@ -193,8 +333,22 @@ MODELS = {
         min_free_hbm_mb=40000,
         reasoning_parser="deepseek_r1",
         runtime_profiles=(
-            RuntimeProfile("tp2_safe", 0.65, 4096, 8, 4096),
-            RuntimeProfile("tp2_low", 0.60, 3072, 4, 2048),
+            RuntimeProfile(
+                "tp2_safe_eager",
+                0.65,
+                4096,
+                4,
+                2048,
+                enforce_eager=True,
+            ),
+            RuntimeProfile(
+                "tp2_low_eager",
+                0.60,
+                3072,
+                2,
+                1536,
+                enforce_eager=True,
+            ),
             RuntimeProfile(
                 "tp2_emergency_eager",
                 0.55,
@@ -247,8 +401,22 @@ MODELS = {
                 pp=1,
                 min_free_hbm_mb=22000,
                 runtime_profiles=(
-                    RuntimeProfile("tp4_safe", 0.40, 4096, 8, 4096),
-                    RuntimeProfile("tp4_low", 0.35, 3072, 4, 2048),
+                    RuntimeProfile(
+                        "tp4_safe_eager",
+                        0.40,
+                        4096,
+                        4,
+                        2048,
+                        enforce_eager=True,
+                    ),
+                    RuntimeProfile(
+                        "tp4_low_eager",
+                        0.35,
+                        3072,
+                        2,
+                        1536,
+                        enforce_eager=True,
+                    ),
                     RuntimeProfile(
                         "tp4_emergency_eager",
                         0.30,
@@ -317,11 +485,34 @@ MODELS = {
         path="/user_home/linlujun/linlujun/model/DeepSeek-R1-Distill-Llama-70B",
         tp=1,
         pp=3,
-        min_free_hbm_mb=60000,
+        min_free_hbm_mb=56000,
         reasoning_parser="deepseek_r1",
-        max_num_seqs=32,
-        max_num_batched_tokens=2048,
-        runtime_profiles=(NORMAL_PROFILE,),
+        runtime_profiles=(
+            RuntimeProfile(
+                "pp3_safe_eager",
+                0.55,
+                4096,
+                4,
+                2048,
+                enforce_eager=True,
+            ),
+            RuntimeProfile(
+                "pp3_low_eager",
+                0.50,
+                3072,
+                2,
+                1536,
+                enforce_eager=True,
+            ),
+            RuntimeProfile(
+                "pp3_emergency_eager",
+                0.45,
+                2048,
+                1,
+                1024,
+                enforce_eager=True,
+            ),
+        ),
     ),
 }
 
@@ -1134,17 +1325,146 @@ def print_container_logs(
 
 def get_container_logs(
     container: str,
-    tail: int = 500,
+    tail: int | None = 500,
 ) -> str:
     if not container_exists(container):
         return ""
+    command = ["docker", "logs"]
+    if tail is not None:
+        command += ["--tail", str(tail)]
+    command.append(container)
     result = subprocess.run(
-        ["docker", "logs", "--tail", str(tail), container],
+        command,
         capture_output=True,
         text=True,
         check=False,
     )
     return "\n".join(part for part in (result.stdout, result.stderr) if part)
+
+
+def safe_log_model_name(model_name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", model_name).strip("-")
+
+
+def save_startup_error_log(model_name: str, logs: str) -> Path:
+    ERROR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
+    stem = f"error-{safe_log_model_name(model_name)}-{timestamp}"
+    path = ERROR_LOG_DIR / f"{stem}.log"
+    suffix = 2
+    while path.exists():
+        path = ERROR_LOG_DIR / f"{stem}-{suffix}.log"
+        suffix += 1
+    path.write_text(logs, encoding="utf-8")
+    return path
+
+
+def classify_startup_failure(logs: str) -> tuple[str, str]:
+    lowered = logs.lower()
+
+    if "rtsmallochost" in lowered or "alloc host memory" in lowered:
+        return (
+            "host_memory_oom",
+            "Ascend runtime 申请 host memory 失败，通常需要降低并发/上下文或启用 eager。",
+        )
+
+    if "no available memory for the cache blocks" in lowered:
+        return (
+            "kv_cache_budget_too_small",
+            "当前并行方式下模型/KV预算过小，继续降低同一档显存只会更难启动。",
+        )
+
+    if (
+        "free memory on device" in lowered
+        or "aclrtmalloc" in lowered
+        or "failed to allocate" in lowered
+        or "out of memory" in lowered
+    ):
+        return (
+            "device_memory_oom",
+            "NPU显存或运行时内存不足，已按配置尝试后续低资源档。",
+        )
+
+    if "max seq len is larger than" in lowered:
+        return (
+            "context_too_long_for_kv_cache",
+            "最大上下文超过当前KV Cache容量，需要缩短 max_model_len。",
+        )
+
+    if "traceback" in lowered:
+        return (
+            "python_traceback",
+            "vLLM服务启动时抛出Python异常，请查看完整错误日志。",
+        )
+
+    return (
+        "startup_failed",
+        "模型服务启动失败，请查看完整错误日志。",
+    )
+
+
+def compact_startup_logs(
+    logs: str,
+    max_lines: int = 80,
+) -> list[str]:
+    noisy_patterns = (
+        "EngineCore pid=",
+        "APIServer pid=",
+        "[FUNC:",
+        "[FILE:",
+        "[LINE:",
+        "FuncErrorReason",
+        "ReportCallError",
+        "error_message_manage.cc",
+        "log_inner.cpp",
+    )
+    important_patterns = (
+        "Traceback",
+        "RuntimeError",
+        "ValueError",
+        "Error:",
+        "ERROR",
+        "Exception",
+        "out of memory",
+        "No available memory",
+        "Free memory on device",
+        "max seq len",
+        "failed",
+        "Failed",
+    )
+
+    kept: list[str] = []
+    skipped = 0
+
+    for line in logs.splitlines():
+        stripped = line.rstrip()
+        lowered = stripped.lower()
+        is_noisy = any(pattern in stripped for pattern in noisy_patterns)
+        is_important = any(
+            pattern.lower() in lowered
+            for pattern in important_patterns
+        )
+
+        if is_noisy and not is_important:
+            skipped += 1
+            continue
+
+        if stripped:
+            kept.append(stripped)
+
+    if skipped:
+        kept.insert(0, f"... 已隐藏 {skipped} 行 Ascend/vLLM 底层重复日志")
+
+    if len(kept) <= max_lines:
+        return kept
+
+    head = max_lines // 2
+    tail = max_lines - head
+    return [
+        *kept[:head],
+        f"... 日志摘要过长，省略 {len(kept) - max_lines} 行；完整内容见错误日志文件",
+        *kept[-tail:],
+    ]
 
 
 def is_memory_startup_failure(logs: str) -> bool:
@@ -1386,11 +1706,21 @@ class ModelService:
                 try:
                     wait_health(self.container, port)
                 except BaseException as exc:
-                    logs = get_container_logs(self.container, tail=500)
+                    logs = get_container_logs(self.container, tail=None)
+                    error_log_path = save_startup_error_log(
+                        self.model_name,
+                        logs,
+                    )
+                    failure_type, failure_hint = classify_startup_failure(logs)
+                    compact_logs = compact_startup_logs(logs)
                     print()
-                    print("模型服务启动失败，最近日志：")
-                    if logs:
-                        print(logs)
+                    print("模型服务启动失败")
+                    print(f"错误类型: {failure_type}")
+                    print(f"处理建议: {failure_hint}")
+                    print(f"完整日志: {error_log_path.resolve()}")
+                    if compact_logs:
+                        print("日志摘要：")
+                        print("\n".join(compact_logs))
                     memory_failure = is_memory_startup_failure(logs)
                     budget_too_small = is_model_budget_too_small(logs)
                     self.stop()
