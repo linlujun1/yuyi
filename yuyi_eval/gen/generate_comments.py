@@ -187,7 +187,6 @@ def generate_one(
                 "generated_text": text,
                 "char_count": len(text),
                 "usage": result.get("usage"),
-                "char_count": len(text),
             }
 
         except (

@@ -330,7 +330,7 @@ def evaluate_semantic_scores(
         )
 
         return final_scores, usage, {
-            "agents": agent_results["agents"],
+            "agents": agent_results,
             "adjudicator": {
                 "text": response_text
             }
