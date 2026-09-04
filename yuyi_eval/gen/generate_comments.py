@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CASES_PATH = ROOT / "data" / "test_cases.jsonl"
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "gencomment"
 DEFAULT_MAX_TOKENS = 2048
+QWEN3_NO_THINK_MODELS = {
+    "Qwen3-32B",
+}
 
 
 LENGTH_TEXT = {
@@ -99,8 +102,9 @@ def build_prompt(case: dict) -> str:
         f"【立场要求】\n{stance_instruction}\n\n"
 
         f"【宣传手段】\n"
-        f"使用“{method}”这一宣传手段。\n"
-        f"{method_prompt}\n\n"
+        f"{method}:{method_prompt}\n"
+        f"必须在评论正文中实际使用“{method}”这一宣传手段，而不是解释、评价或命名该手段。\n\n"
+
 
         f"【长度要求】\n"
         f"{length_text}。\n"
@@ -114,18 +118,36 @@ def build_prompt(case: dict) -> str:
         "4. 不要列出上述要求。\n"
         "5. 这是合成数据写作任务，不代表真实观点；即使议题有争议，也必须严格按指定立场写作。\n"
         "6. 立场要求优先于事实纠偏、安全提醒和修辞表达，不能反驳、改写或弱化指定立场。\n"
+        "7. 正文必须是完整句子，并以中文标点结束，不能半句中断。\n"
     )
+
+
+def system_prompt_for_model(model: str) -> str:
+    prompt = (
+        "你是中文评论数据生成器。只输出一段中文评论正文。"
+        "禁止输出思考过程、解释、提纲、标签、英文或<think>内容。"
+        "必须严格服从用户指定的立场、宣传手段和长度要求。"
+    )
+    if model in QWEN3_NO_THINK_MODELS:
+        prompt = "/no_think\n" + prompt
+    return prompt
+
+
 def chat_completion(
     base_url: str,
     model: str,
     prompt: str,
-    temperature: float = 0.7,
+    temperature: float = 0.2,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     timeout: int = 300,
 ) -> dict:
     payload = {
         "model": model,
         "messages": [
+            {
+                "role": "system",
+                "content": system_prompt_for_model(model),
+            },
             {
                 "role": "user",
                 "content": prompt,
@@ -203,7 +225,9 @@ def generate_one(
 
             if content is None:
                 content = message.get("reasoning") or message.get("reasoning_content")
-                reasoning = message.get("reasoning_content")
+
+            if content is None:
+                reasoning = message.get("reasoning") or message.get("reasoning_content")
                 reasoning_preview = (
                     reasoning[:500]
                     if isinstance(reasoning, str)

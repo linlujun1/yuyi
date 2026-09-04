@@ -305,6 +305,39 @@ class NPUAllocatorTests(unittest.TestCase):
         )
         self.assertEqual(required, 27034)
 
+    def test_qwen3_32b_uses_dense_32b_plans_without_reasoning_parser(self) -> None:
+        model = ms.MODELS["Qwen3-32B"]
+
+        self.assertEqual(model.path, "/user_home/linlujun/linlujun/model/Qwen3-32B")
+        self.assertIsNone(model.reasoning_parser)
+        self.assertEqual(
+            [(plan.name, plan.tp, plan.pp) for plan in model.parallel_plans],
+            [
+                ("tp2_pp1", 2, 1),
+                ("pp3", 1, 3),
+                ("tp4", 4, 1),
+                ("pp5", 1, 5),
+                ("tp8", 8, 1),
+            ],
+        )
+
+        command = ms.build_docker_command(
+            model_name="Qwen3-32B",
+            model=model,
+            parallel_plan=model.parallel_plans[0],
+            selected_npus=[
+                ms.NPUInfo(1, 65536, 0, 0),
+                ms.NPUInfo(5, 65536, 0, 0),
+            ],
+            port=18000,
+            container_name="test-container",
+            profile=model.runtime_profiles[0],
+            lease_token="test-token",
+        )
+
+        self.assertNotIn("--reasoning-parser", command)
+        self.assertIn("--enforce-eager", command)
+
     def test_14b_models_use_tp2_conservative_profiles(self) -> None:
         for model_name in (
             "Qwen2.5-14B-Instruct",

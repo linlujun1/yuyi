@@ -117,6 +117,44 @@ class MultiAgentEvaluationTests(unittest.TestCase):
 
         self.assertIn('"max_tokens": 1024', captured["body"].decode("utf-8"))
 
+    def test_qwen3_evaluator_request_disables_thinking(self) -> None:
+        captured = {}
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return (
+                    b'{"choices":[{"message":{"content":"'
+                    b'{\\"issue\\": 1, \\"method\\": 1, \\"stance\\": 1}'
+                    b'"}}],"usage":{"total_tokens":12}}'
+                )
+
+        def fake_urlopen(request, timeout):
+            captured["body"] = request.data
+            return FakeResponse()
+
+        with mock.patch.object(
+            evaluation.urllib.request,
+            "urlopen",
+            side_effect=fake_urlopen,
+        ):
+            evaluation.chat_completion(
+                base_url="http://127.0.0.1:1/v1",
+                model="Qwen3-32B",
+                prompt="测试",
+            )
+
+        body = captured["body"].decode("utf-8")
+        self.assertIn("/no_think", body)
+        self.assertIn("语义一致性评价器", body)
+
     def test_empty_content_response_raises_clear_error(self) -> None:
         class FakeResponse:
             status = 200
