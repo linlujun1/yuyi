@@ -269,74 +269,33 @@ MODELS = {
         path="/user_home/linlujun/linlujun/model/Qwen3-32B",
         tp=2,
         pp=1,
-        min_free_hbm_mb=40000,
+        min_free_hbm_mb=50000,
         runtime_profiles=(
             RuntimeProfile(
-                "tp2_safe_eager",
-                0.65,
-                4096,
-                4,
-                2048,
-                enforce_eager=True,
-            ),
-            RuntimeProfile(
-                "tp2_low_eager",
-                0.60,
-                3072,
-                2,
+                "tp2_fast",
+                0.72,
                 1536,
-                enforce_eager=True,
+                1,
+                1024,
             ),
             RuntimeProfile(
-                "tp2_emergency_eager",
-                0.55,
-                2048,
+                "tp2_eager",
+                0.68,
+                1536,
                 1,
-                2048,
+                1024,
                 enforce_eager=True,
             ),
         ),
         fallback_parallel_plans=(
             # Qwen3-32B 是 64 Q heads / 8 KV heads；不能用 TP3/TP5。
-            # 奇数卡资源碎片场景保留 TP1 + PP3/PP5 作为能跑优先的兜底。
-            ParallelPlan(
-                name="pp3",
-                tp=1,
-                pp=3,
-                min_free_hbm_mb=28000,
-                runtime_profiles=(
-                    RuntimeProfile(
-                        "pp3_safe",
-                        0.50,
-                        4096,
-                        8,
-                        4096,
-                        enforce_eager=True,
-                    ),
-                    RuntimeProfile(
-                        "pp3_low",
-                        0.45,
-                        3072,
-                        4,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                    RuntimeProfile(
-                        "pp3_emergency_eager",
-                        0.40,
-                        2048,
-                        1,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                ),
-                fallback_on_startup_error=True,
-            ),
+            # Ascend 上 PP3/PP5 容易在 worker/TCPStore 初始化阶段失败；
+            # 先试省卡的 TP2，再退到更稳的 TP4/TP8。
             ParallelPlan(
                 name="tp4",
                 tp=4,
                 pp=1,
-                min_free_hbm_mb=22000,
+                min_free_hbm_mb=26000,
                 runtime_profiles=(
                     RuntimeProfile(
                         "tp4_safe_eager",
@@ -363,39 +322,6 @@ MODELS = {
                         enforce_eager=True,
                     ),
                 ),
-            ),
-            ParallelPlan(
-                name="pp5",
-                tp=1,
-                pp=5,
-                min_free_hbm_mb=16000,
-                runtime_profiles=(
-                    RuntimeProfile(
-                        "pp5_safe",
-                        0.35,
-                        4096,
-                        8,
-                        4096,
-                        enforce_eager=True,
-                    ),
-                    RuntimeProfile(
-                        "pp5_low",
-                        0.30,
-                        3072,
-                        4,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                    RuntimeProfile(
-                        "pp5_emergency_eager",
-                        0.25,
-                        2048,
-                        1,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                ),
-                fallback_on_startup_error=True,
             ),
             ParallelPlan(
                 name="tp8",
@@ -483,7 +409,7 @@ MODELS = {
         path="/user_home/linlujun/linlujun/model/DeepSeek-R1-Distill-Qwen-32B",
         tp=2,
         pp=1,
-        min_free_hbm_mb=40000,
+        min_free_hbm_mb=55000,
         reasoning_parser="deepseek_r1",
         runtime_profiles=(
             RuntimeProfile(
@@ -515,159 +441,6 @@ MODELS = {
             # Qwen-32B 的 40 个 attention heads 和 8 个 KV heads
             # 不能被 3/5 整除；奇数卡必须使用 TP1 + PP3/PP5。
             # PP 档统一关闭图捕获，以减少额外显存并提高 Ascend 兼容性。
-            ParallelPlan(
-                name="pp3",
-                tp=1,
-                pp=3,
-                min_free_hbm_mb=28000,
-                runtime_profiles=(
-                    RuntimeProfile(
-                        "pp3_safe",
-                        0.50,
-                        4096,
-                        8,
-                        4096,
-                        enforce_eager=True,
-                    ),
-                    RuntimeProfile(
-                        "pp3_low",
-                        0.45,
-                        3072,
-                        4,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                    RuntimeProfile(
-                        "pp3_emergency_eager",
-                        0.40,
-                        2048,
-                        1,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                ),
-                fallback_on_startup_error=True,
-            ),
-            ParallelPlan(
-                name="tp4",
-                tp=4,
-                pp=1,
-                min_free_hbm_mb=22000,
-                runtime_profiles=(
-                    RuntimeProfile(
-                        "tp4_safe_eager",
-                        0.40,
-                        4096,
-                        4,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                    RuntimeProfile(
-                        "tp4_low_eager",
-                        0.35,
-                        3072,
-                        2,
-                        1536,
-                        enforce_eager=True,
-                    ),
-                    RuntimeProfile(
-                        "tp4_emergency_eager",
-                        0.30,
-                        2048,
-                        1,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                ),
-            ),
-            ParallelPlan(
-                name="pp5",
-                tp=1,
-                pp=5,
-                min_free_hbm_mb=16000,
-                runtime_profiles=(
-                    RuntimeProfile(
-                        "pp5_safe",
-                        0.35,
-                        4096,
-                        8,
-                        4096,
-                        enforce_eager=True,
-                    ),
-                    RuntimeProfile(
-                        "pp5_low",
-                        0.30,
-                        3072,
-                        4,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                    RuntimeProfile(
-                        "pp5_emergency_eager",
-                        0.25,
-                        2048,
-                        1,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                ),
-                fallback_on_startup_error=True,
-            ),
-            ParallelPlan(
-                name="tp8",
-                tp=8,
-                pp=1,
-                min_free_hbm_mb=14000,
-                runtime_profiles=(
-                    RuntimeProfile("tp8_safe", 0.30, 4096, 8, 4096),
-                    RuntimeProfile("tp8_low", 0.25, 3072, 4, 2048),
-                    RuntimeProfile(
-                        "tp8_emergency_eager",
-                        0.20,
-                        2048,
-                        1,
-                        2048,
-                        enforce_eager=True,
-                    ),
-                ),
-            ),
-        ),
-    ),
-
-    "Qwen3-32B": ModelConfig(
-        path="/user_home/linlujun/linlujun/model/Qwen3-32B",
-        tp=2,
-        pp=1,
-        min_free_hbm_mb=40000,
-        runtime_profiles=(
-            RuntimeProfile(
-                "tp2_safe_eager",
-                0.65,
-                4096,
-                4,
-                2048,
-                enforce_eager=True,
-            ),
-            RuntimeProfile(
-                "tp2_low_eager",
-                0.60,
-                3072,
-                2,
-                1536,
-                enforce_eager=True,
-            ),
-            RuntimeProfile(
-                "tp2_emergency_eager",
-                0.55,
-                2048,
-                1,
-                2048,
-                enforce_eager=True,
-            ),
-        ),
-        fallback_parallel_plans=(
-            # Qwen3-32B 的 40 个 attention heads 和 8 个 KV heads
-            # 不能被 3/5 整除；奇数卡必须使用 TP1 + PP3/PP5。
             ParallelPlan(
                 name="pp3",
                 tp=1,
