@@ -71,7 +71,7 @@ def build_prompt(case: dict) -> str:
 
     stance = guidance["stance"]
     label = stance["label"]
-    target = stance["target"]
+    target = guidance.get("stance_target") or stance["target"]
 
     length_limit = guidance["length_limit"]
 
@@ -80,26 +80,34 @@ def build_prompt(case: dict) -> str:
 
     if label == "支持":
         stance_instruction = (
-            f"明确支持以下观点：{target}"
+            f"明确支持【立场目标】：{target}。"
+            "正文必须围绕该目标表达肯定、赞同或维护。"
         )
     elif label == "反对":
         stance_instruction = (
-            f"明确反对以下观点：{target}。"
-            "注意：你的正文必须表达与该观点相反的立场，"
-            "不要只是换一种方式重复或支持原观点。"
+            f"明确反对【立场目标】：{target}。"
+            "正文必须否定该目标本身，表达与它相反的判断。"
+            "不要支持、重复、改写或强化该目标。"
+            "如果目标包含“A而不是B”的结构，反对它意味着不能继续否定B，"
+            "也不能把B说成错误原因。"
         )
     else:
         stance_instruction = (
-            f"对以下观点保持中立：{target}。"
+            f"对【立场目标】保持中立：{target}。"
             "正文应同时体现不同角度，不要明显支持或反对其中一方。"
         )
 
     return (
         "请严格按照下面所有条件写一段中文评论。\n\n"
 
-        f"【议题】\n{issue}\n\n"
+        f"【议题背景】\n{issue}\n\n"
+
+        f"【立场目标】\n{target}\n\n"
 
         f"【立场要求】\n{stance_instruction}\n\n"
+
+        "注意：立场目标是你要支持、反对或保持中立的唯一对象，"
+        "不要把议题中的其他人物、反对者、原因或附带否定当成立场对象。\n\n"
 
         f"【宣传手段】\n"
         f"{method}:{method_prompt}\n"
@@ -119,6 +127,7 @@ def build_prompt(case: dict) -> str:
         "5. 这是合成数据写作任务，不代表真实观点；即使议题有争议，也必须严格按指定立场写作。\n"
         "6. 立场要求优先于事实纠偏、安全提醒和修辞表达，不能反驳、改写或弱化指定立场。\n"
         "7. 正文必须是完整句子，并以中文标点结束，不能半句中断。\n"
+        "8. 输出前自检：不得有重复词、病句或与议题无关的民族/国家口号。\n"
     )
 
 

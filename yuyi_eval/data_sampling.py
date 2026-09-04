@@ -3,12 +3,22 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+
+from llm_service.model_service import ModelService
 
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TOPICS_PATH = ROOT / "data" / "议题.json"
 DEFAULT_OUTPUT_PATH = ROOT / "data" / "test_cases.jsonl"
+DEFAULT_TARGET_MAX_TOKENS = 128
+QWEN3_NO_THINK_MODELS = {
+    "Qwen3-32B",
+}
 
 
 PROPAGANDA_PROMPTS = {
@@ -43,6 +53,186 @@ LENGTH_LIMITS = [
     "medium",
     "long",
 ]
+
+
+def system_prompt_for_stance_target(model: str) -> str:
+    prompt = (
+        "你是立场目标抽取器。只输出 JSON。"
+        "禁止输出解释、思考过程、提纲、标签或 <think> 内容。"
+    )
+
+    if model in QWEN3_NO_THINK_MODELS:
+        prompt = "/no_think\n" + prompt
+
+    return prompt
+
+
+def build_stance_target_prompt(
+    issue: str,
+    label: str,
+) -> str:
+    return (
+        "请根据议题和立场标签，生成一个简短、明确、中文化的立场目标。\n\n"
+        "要求：\n"
+        "1. 只输出 JSON，不要解释。\n"
+        "2. target 必须是名词短语或短句，不超过 35 个中文字符。\n"
+        "3. target 表示“支持/反对/中立”直接作用的对象。\n"
+        "4. 不要直接复制原议题长句。\n"
+        "5. 如果原议题包含否定、因果、比较或“A而不是B”，"
+        "请抽取整句话真正主张的核心观点。\n"
+        "6. 如果立场是“反对”，target 仍然写原观点本身，"
+        "不要写成反命题。\n"
+        '7. 输出格式：{"target":"..."}\n\n'
+        f"议题：{issue}\n"
+        f"立场：{label}\n"
+    )
+
+
+def clean_model_text(text: str) -> str:
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+
+    text = re.sub(
+        r"<think>.*?(</think>|$)",
+        "",
+        text,
+        flags=re.S,
+    )
+
+    return text.strip()
+
+
+def parse_stance_target_response(text: str) -> str:
+    text = clean_model_text(text)
+    match = re.search(r"\{.*\}", text, flags=re.S)
+
+    if not match:
+        raise ValueError(f"无法从模型输出中解析 JSON: {text[:500]}")
+
+    data = json.loads(match.group(0))
+    target = str(data.get("target", "")).strip()
+
+    if not target:
+        raise ValueError(f"模型输出缺少 target: {text[:500]}")
+
+    return target
+
+
+def chat_completion(
+    base_url: str,
+    model: str,
+    prompt: str,
+    max_tokens: int = DEFAULT_TARGET_MAX_TOKENS,
+    timeout: int = 300,
+) -> dict:
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt_for_stance_target(model),
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        "temperature": 0.0,
+        "max_tokens": max_tokens,
+    }
+
+    data = json.dumps(
+        payload,
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=timeout,
+        ) as response:
+            return json.loads(
+                response.read().decode("utf-8")
+            )
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode(
+            "utf-8",
+            errors="replace",
+        )
+        raise RuntimeError(
+            "立场目标生成请求失败: "
+            f"HTTP {exc.code} {exc.reason}\n"
+            f"URL: {request.full_url}\n"
+            f"Model: {model}\n"
+            f"Prompt chars: {len(prompt)}\n"
+            f"Max tokens: {max_tokens}\n"
+            f"vLLM response:\n{error_body}"
+        ) from exc
+
+
+def generate_stance_target(
+    base_url: str,
+    model: str,
+    issue: str,
+    label: str,
+    max_tokens: int = DEFAULT_TARGET_MAX_TOKENS,
+    retries: int = 2,
+) -> str:
+    prompt = build_stance_target_prompt(
+        issue=issue,
+        label=label,
+    )
+    last_error = None
+
+    for attempt in range(retries + 1):
+        try:
+            result = chat_completion(
+                base_url=base_url,
+                model=model,
+                prompt=prompt,
+                max_tokens=max_tokens,
+            )
+            message = result["choices"][0]["message"]
+            content = message.get("content")
+
+            if content is None:
+                content = (
+                    message.get("reasoning")
+                    or message.get("reasoning_content")
+                )
+
+            if content is None:
+                raise ValueError(
+                    "立场目标模型返回空 content。\n"
+                    f"Raw response:\n"
+                    f"{json.dumps(result, ensure_ascii=False)[:2000]}"
+                )
+
+            return parse_stance_target_response(content)
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            KeyError,
+            RuntimeError,
+            ValueError,
+        ) as exc:
+            last_error = exc
+
+            if attempt < retries:
+                time.sleep(2)
+
+    raise RuntimeError(
+        f"立场目标生成失败: {issue[:80]}"
+    ) from last_error
 
 
 def load_topics(path: str | Path = DEFAULT_TOPICS_PATH) -> list[dict]:
@@ -123,6 +313,8 @@ def build_test_cases(
     num_samples: int = 100,
     seed: int = 42,
     topics_path: str | Path = DEFAULT_TOPICS_PATH,
+    target_model: str | None = None,
+    target_max_tokens: int = DEFAULT_TARGET_MAX_TOKENS,
 ) -> list[dict]:
     if num_samples <= 0:
         raise ValueError("num_samples 必须大于 0")
@@ -156,26 +348,63 @@ def build_test_cases(
 
     cases = []
 
-    for i in range(num_samples):
-        topic = selected_topics[i]
+    def append_case(
+        index: int,
+        topic: dict,
+        stance_target: str,
+    ) -> None:
         issue = str(topic["issue"]).strip()
 
-        case = {
-            "sample_id": f"tg012_{i + 1:04d}",
-            "topic_id": topic.get("id"),
-            "topic_type": topic.get("type"),
-            "guidance": {
-                "issue": issue,
-                "propaganda_method": methods[i],
-                "stance": {
-                    "label": stances[i],
-                    "target": issue,
+        cases.append(
+            {
+                "sample_id": f"tg012_{index + 1:04d}",
+                "topic_id": topic.get("id"),
+                "topic_type": topic.get("type"),
+                "guidance": {
+                    "issue": issue,
+                    "propaganda_method": methods[index],
+                    "stance_target": stance_target,
+                    "stance": {
+                        "label": stances[index],
+                        "target": stance_target,
+                    },
+                    "length_limit": lengths[index],
                 },
-                "length_limit": lengths[i],
-            },
-        }
+            }
+        )
 
-        cases.append(case)
+    if target_model is None:
+        for i in range(num_samples):
+            topic = selected_topics[i]
+            append_case(
+                index=i,
+                topic=topic,
+                stance_target=str(topic["issue"]).strip(),
+            )
+
+        return cases
+
+    with ModelService(target_model) as service:
+        for i in range(num_samples):
+            topic = selected_topics[i]
+            issue = str(topic["issue"]).strip()
+            print(
+                f"[{i + 1}/{num_samples}] 生成立场目标: "
+                f"tg012_{i + 1:04d}",
+                flush=True,
+            )
+            stance_target = generate_stance_target(
+                base_url=service.base_url,
+                model=target_model,
+                issue=issue,
+                label=stances[i],
+                max_tokens=target_max_tokens,
+            )
+            append_case(
+                index=i,
+                topic=topic,
+                stance_target=stance_target,
+            )
 
     return cases
 
@@ -226,12 +455,30 @@ def main() -> None:
         default=str(DEFAULT_OUTPUT_PATH),
     )
 
+    parser.add_argument(
+        "--target-model",
+        default=None,
+        help=(
+            "用于生成 guidance.stance_target / guidance.stance.target "
+            "的模型；默认不调用模型，仍直接复制议题"
+        ),
+    )
+
+    parser.add_argument(
+        "--target-max-tokens",
+        type=int,
+        default=DEFAULT_TARGET_MAX_TOKENS,
+        help="每条立场目标生成请求允许的最大输出 token 数",
+    )
+
     args = parser.parse_args()
 
     cases = build_test_cases(
         num_samples=args.num_samples,
         seed=args.seed,
         topics_path=args.topics,
+        target_model=args.target_model,
+        target_max_tokens=args.target_max_tokens,
     )
 
     save_test_cases(
