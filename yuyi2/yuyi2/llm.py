@@ -26,11 +26,28 @@ class PlatformLLM:
         self.base_url = os.environ["OPENAI_BASE_URL"].rstrip("/")
         self.api_key = os.environ["OPENAI_API_KEY"]
         self.model = os.environ["LLM_MODEL"]
-        self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        self.client = OpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key,
+        )
 
-    def chat(self, system: str, user: str, temperature: float = 0.0, max_tokens: int = 512) -> LLMResult:
+    def chat(
+        self,
+        system: str,
+        user: str,
+        temperature: float = 0.0,
+        max_tokens: int = 512,
+    ) -> LLMResult:
+        kwargs = {}
+
         if self.model.lower().startswith("qwen3"):
             system = "/no_think\n" + system
+            user = "/no_think\n" + user
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {
+                    "enable_thinking": False
+                }
+            }
 
         resp = self.client.chat.completions.create(
             model=self.model,
@@ -40,6 +57,7 @@ class PlatformLLM:
             ],
             temperature=temperature,
             max_tokens=max_tokens,
+            **kwargs,
         )
 
         msg = resp.choices[0].message
