@@ -3,22 +3,23 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import re
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from llm_service.model_service import ModelService
+from yuyi_eval.llm_common import (
+    add_no_think_for_qwen3,
+    clean_thinking_text,
+    message_text,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TOPICS_PATH = ROOT / "data" / "议题.json"
 DEFAULT_OUTPUT_PATH = ROOT / "data" / "test_cases.jsonl"
 DEFAULT_TARGET_MAX_TOKENS = 128
-QWEN3_NO_THINK_MODELS = {
-    "Qwen3-32B",
-}
 
 
 PROPAGANDA_PROMPTS = {
@@ -61,10 +62,7 @@ def system_prompt_for_stance_target(model: str) -> str:
         "禁止输出解释、思考过程、提纲、标签或 <think> 内容。"
     )
 
-    if model in QWEN3_NO_THINK_MODELS:
-        prompt = "/no_think\n" + prompt
-
-    return prompt
+    return add_no_think_for_qwen3(model, prompt)
 
 
 def build_stance_target_prompt(
@@ -88,28 +86,15 @@ def build_stance_target_prompt(
     )
 
 
-def clean_model_text(text: str) -> str:
-    if "</think>" in text:
-        text = text.rsplit("</think>", 1)[1]
-
-    text = re.sub(
-        r"<think>.*?(</think>|$)",
-        "",
-        text,
-        flags=re.S,
-    )
-
-    return text.strip()
-
-
 def parse_stance_target_response(text: str) -> str:
-    text = clean_model_text(text)
-    match = re.search(r"\{.*\}", text, flags=re.S)
+    text = clean_thinking_text(text)
+    start = text.find("{")
+    end = text.rfind("}")
 
-    if not match:
+    if start < 0 or end < start:
         raise ValueError(f"无法从模型输出中解析 JSON: {text[:500]}")
 
-    data = json.loads(match.group(0))
+    data = json.loads(text[start:end + 1])
     target = str(data.get("target", "")).strip()
 
     if not target:
@@ -202,13 +187,7 @@ def generate_stance_target(
                 max_tokens=max_tokens,
             )
             message = result["choices"][0]["message"]
-            content = message.get("content")
-
-            if content is None:
-                content = (
-                    message.get("reasoning")
-                    or message.get("reasoning_content")
-                )
+            content = message_text(message)
 
             if content is None:
                 raise ValueError(

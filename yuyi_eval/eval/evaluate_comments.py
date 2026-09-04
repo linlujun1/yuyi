@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 
 from llm_service.model_service import MODELS, ModelService
+from yuyi_eval.llm_common import add_no_think_for_qwen3
 
 
 DEFAULT_EVALUATOR = "DeepSeek-R1-Distill-Qwen-32B"
@@ -20,19 +21,12 @@ SMALL_EVALUATORS = {
     "Qwen2.5-1.5B-Instruct",
     "Qwen2.5-0.5B-Instruct",
 }
-QWEN3_NO_THINK_MODELS = {
-    "Qwen3-32B",
-}
-
-
 def system_prompt_for_evaluator(model: str) -> str:
     prompt = (
         "你是语义一致性评价器。只输出题目要求的 JSON，"
         "不要输出思考过程、解释、Markdown、英文或<think>内容。"
     )
-    if model in QWEN3_NO_THINK_MODELS:
-        prompt = "/no_think\n" + prompt
-    return prompt
+    return add_no_think_for_qwen3(model, prompt)
 
 
 def load_jsonl(path: Path) -> list[dict]:

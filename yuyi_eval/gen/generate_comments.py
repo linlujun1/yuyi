@@ -6,19 +6,20 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-import re
 
 from llm_service.model_service import ModelService
 from yuyi_eval.data_sampling import PROPAGANDA_PROMPTS
+from yuyi_eval.llm_common import (
+    add_no_think_for_qwen3,
+    clean_thinking_text,
+    message_text,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CASES_PATH = ROOT / "data" / "test_cases.jsonl"
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "gencomment"
 DEFAULT_MAX_TOKENS = 2048
-QWEN3_NO_THINK_MODELS = {
-    "Qwen3-32B",
-}
 
 
 LENGTH_TEXT = {
@@ -137,9 +138,7 @@ def system_prompt_for_model(model: str) -> str:
         "禁止输出思考过程、解释、提纲、标签、英文或<think>内容。"
         "必须严格服从用户指定的立场、宣传手段和长度要求。"
     )
-    if model in QWEN3_NO_THINK_MODELS:
-        prompt = "/no_think\n" + prompt
-    return prompt
+    return add_no_think_for_qwen3(model, prompt)
 
 
 def chat_completion(
@@ -203,11 +202,7 @@ def chat_completion(
             f"vLLM response:\n{error_body}"
         ) from exc
 
-def clean_generated_text(text: str) -> str:
-    if "</think>" in text:
-        text = text.rsplit("</think>", 1)[1]
-    text = re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S)
-    return text.strip()
+
 def generate_one(
     base_url: str,
     model: str,
@@ -230,13 +225,10 @@ def generate_one(
 
             choice = result["choices"][0]
             message = choice["message"]
-            content = message.get("content")
+            content = message_text(message)
 
             if content is None:
-                content = message.get("reasoning") or message.get("reasoning_content")
-
-            if content is None:
-                reasoning = message.get("reasoning") or message.get("reasoning_content")
+                reasoning = message_text(message)
                 reasoning_preview = (
                     reasoning[:500]
                     if isinstance(reasoning, str)
@@ -257,7 +249,7 @@ def generate_one(
                     f"{json.dumps(result, ensure_ascii=False)[:4000]}"
                 )
 
-            text = clean_generated_text(content)
+            text = clean_thinking_text(content)
 
             if not text:
                 raise ValueError(

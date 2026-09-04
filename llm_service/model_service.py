@@ -611,6 +611,24 @@ class NPUInfo:
         return self.total_hbm_mb - self.used_hbm_mb
 
 
+@dataclass(frozen=True)
+class VLLMStartupMemoryError:
+    free_gib: float
+    total_gib: float
+    utilization: float
+    requested_gib: float
+
+    @property
+    def shortfall_gib(self) -> float:
+        return max(0.0, self.requested_gib - self.free_gib)
+
+    @property
+    def max_passing_utilization(self) -> float:
+        if self.total_gib <= 0:
+            return 0.0
+        return self.free_gib / self.total_gib
+
+
 def run_npu_smi() -> str:
     result = subprocess.run(
         ["npu-smi", "info"],
@@ -763,6 +781,50 @@ def required_free_hbm_mb(
         model_floor,
         vllm_requested + reserve,
     )
+
+
+def requested_hbm_mb(npu: NPUInfo, profile: RuntimeProfile) -> int:
+    return math.ceil(npu.total_hbm_mb * profile.gpu_memory_utilization)
+
+
+def format_signed_mb(value: int) -> str:
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value} MB"
+
+
+def format_npu_memory_diagnostics(
+    model: ModelConfig,
+    selected: list[NPUInfo],
+    profile: RuntimeProfile,
+    plan: ParallelPlan,
+    shared: bool = False,
+) -> list[str]:
+    lines = ["NPU显存诊断:"]
+    for npu in selected:
+        requested = requested_hbm_mb(npu, profile)
+        required = required_free_hbm_mb(
+            model,
+            npu,
+            profile,
+            plan,
+            shared=shared,
+        )
+        process_text = "有" if npu.has_process else "无"
+        holders = ",".join(npu.docker_holders) or "无"
+        lines.append(
+            f"  NPU {npu.device_id}: "
+            f"total={npu.total_hbm_mb} MB, "
+            f"used={npu.used_hbm_mb} MB, "
+            f"free={npu.free_hbm_mb} MB, "
+            f"vLLM请求≈{requested} MB, "
+            f"准入={required} MB, "
+            f"准入余量={format_signed_mb(npu.free_hbm_mb - required)}, "
+            f"启动后预计剩余={format_signed_mb(npu.free_hbm_mb - requested)}, "
+            f"AICore={npu.aicore_pct}%, "
+            f"process={process_text}, "
+            f"Docker映射={holders}"
+        )
+    return lines
 
 
 def _group_topology_score(
@@ -1438,6 +1500,52 @@ def save_startup_error_log(model_name: str, logs: str) -> Path:
     return path
 
 
+def gib_to_mb(value: float) -> int:
+    return round(value * 1024)
+
+
+def parse_vllm_startup_memory_error(
+    logs: str,
+) -> VLLMStartupMemoryError | None:
+    match = re.search(
+        r"Free memory on device "
+        r"\((?P<free>[0-9.]+)/(?P<total>[0-9.]+) GiB\) "
+        r"on startup is less than desired GPU memory utilization "
+        r"\((?P<utilization>[0-9.]+), (?P<requested>[0-9.]+) GiB\)",
+        logs,
+        flags=re.I,
+    )
+    if match is None:
+        return None
+
+    return VLLMStartupMemoryError(
+        free_gib=float(match.group("free")),
+        total_gib=float(match.group("total")),
+        utilization=float(match.group("utilization")),
+        requested_gib=float(match.group("requested")),
+    )
+
+
+def format_vllm_memory_error_diagnostics(logs: str) -> list[str]:
+    error = parse_vllm_startup_memory_error(logs)
+    if error is None:
+        return []
+
+    return [
+        "vLLM启动显存诊断: "
+        f"实际空闲={error.free_gib:.2f}/{error.total_gib:.2f} GiB "
+        f"({gib_to_mb(error.free_gib)}/{gib_to_mb(error.total_gib)} MB), "
+        f"期望占用={error.requested_gib:.2f} GiB "
+        f"({gib_to_mb(error.requested_gib)} MB), "
+        f"差额={error.shortfall_gib:.2f} GiB "
+        f"({gib_to_mb(error.shortfall_gib)} MB)",
+        "vLLM按当前实际空闲最多只能接受 "
+        f"gpu_memory_utilization≈{error.max_passing_utilization:.2f}；"
+        "如果外层选卡余量充足而这里很低，优先检查残留进程、"
+        "ASCEND_VISIBLE_DEVICES映射和容器内外NPU编号是否一致。",
+    ]
+
+
 def classify_startup_failure(logs: str) -> tuple[str, str]:
     lowered = logs.lower()
 
@@ -1459,6 +1567,11 @@ def classify_startup_failure(logs: str) -> tuple[str, str]:
         or "failed to allocate" in lowered
         or "out of memory" in lowered
     ):
+        if parse_vllm_startup_memory_error(logs) is not None:
+            return (
+                "vllm_device_memory_gate",
+                "vLLM启动时看到的NPU空闲显存低于本档期望占用；请对照下方诊断确认差额。",
+            )
         return (
             "device_memory_oom",
             "NPU显存或运行时内存不足，已按配置尝试后续低资源档。",
@@ -1768,6 +1881,17 @@ class ModelService:
                 print(f"NPU 数量: {parallel_plan.num_npus}")
                 print(f"NPU: {selected_text}")
                 print(f"每卡准入显存: {required_text} MB")
+                print(
+                    "\n".join(
+                        format_npu_memory_diagnostics(
+                            model,
+                            selected,
+                            profile,
+                            parallel_plan,
+                            shared=shared,
+                        )
+                    )
+                )
                 if shared:
                     print(f"共享安全预留: {SHARED_RESERVE_HBM_MB} MB")
                 print(f"端口: {port}")
@@ -1797,6 +1921,11 @@ class ModelService:
                     print(f"错误类型: {failure_type}")
                     print(f"处理建议: {failure_hint}")
                     print(f"完整日志: {error_log_path.resolve()}")
+                    memory_diagnostics = format_vllm_memory_error_diagnostics(
+                        logs
+                    )
+                    if memory_diagnostics:
+                        print("\n".join(memory_diagnostics))
                     if compact_logs:
                         print("日志摘要：")
                         print("\n".join(compact_logs))
@@ -2068,18 +2197,15 @@ def plan(model_name: str) -> None:
         + " MB"
     )
     print(
-        "启动后预计剩余: "
-        + ",".join(
-            str(
-                npu.free_hbm_mb
-                - math.ceil(
-                    npu.total_hbm_mb
-                    * selected_profile.gpu_memory_utilization
-                )
+        "\n".join(
+            format_npu_memory_diagnostics(
+                model,
+                selected,
+                selected_profile,
+                selected_plan,
+                shared=bool(selected_shared),
             )
-            for npu in selected
         )
-        + " MB"
     )
 
 def get_running_container_npu_holders() -> dict[int, list[str]]:
