@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, os.environ["MODEL_DIR"])
 
 from model import load_model, predict
-from yuyi2.eval_core import evaluate_one
+from yuyi2.eval_core import aggregate_scores, evaluate_one
 
 
 MODEL_DIR = Path(os.environ["MODEL_DIR"])
@@ -44,7 +44,9 @@ def main():
     model = load_model(str(MODEL_DIR))
     preds = predict(model, cases)
 
-    method = os.environ.get("YUYI_EVAL_METHOD", "geval").lower().strip()
+    method = os.environ.get("YUYI_EVAL_METHOD", "direct").lower().strip()
+    if method == "mul_agent":
+        method = "multi_agent"
 
     details = []
     for case, pred in zip(cases, preds):
@@ -61,7 +63,7 @@ def main():
             **result,
         })
 
-    acc = sum(x["scores"]["overall"] for x in details) / len(details) if details else 0.0
+    summary = aggregate_scores(details)
 
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -70,7 +72,19 @@ def main():
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
     with (RESULT_DIR / "metrics.json").open("w", encoding="utf-8") as f:
-        json.dump([{"name": "acc", "value": acc, "unit": ""}], f, ensure_ascii=False)
+        json.dump([
+            {"name": "acc", "value": summary["MacroAvg"], "unit": ""},
+            {"name": "MacroAvg", "value": summary["MacroAvg"], "unit": ""},
+            {"name": "DimAvg_s_issue", "value": summary["DimAvg"]["s_issue"], "unit": ""},
+            {"name": "DimAvg_s_method", "value": summary["DimAvg"]["s_method"], "unit": ""},
+            {"name": "DimAvg_s_stance", "value": summary["DimAvg"]["s_stance"], "unit": ""},
+            {"name": "DimAvg_s_length", "value": summary["DimAvg"]["s_length"], "unit": ""},
+            {"name": "PassRate", "value": summary["PassRate"], "unit": ""},
+            {"name": "Gap", "value": summary["Gap"], "unit": ""},
+        ], f, ensure_ascii=False)
+
+    with (RESULT_DIR / "summary.json").open("w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":

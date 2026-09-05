@@ -1,0 +1,14 @@
+{
+  "MacroAvg": 0.86875,
+  "DimAvg": {
+    "s_issue": 0.9083333333333333,
+    "s_method": 0.8166666666666667,
+    "s_stance": 0.8,
+    "s_length": 0.95
+  },
+  "PassRate": 0.5833333333333334,
+  "WorstDim": "s_stance",
+  "Gap": 0.1499999999999999,
+  "n": 60,
+  "threshold": 0.8
+}
