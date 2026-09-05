@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import glob
+import csv
 import json
 import os
 import sys
@@ -17,22 +18,29 @@ TEST_DIR = Path(os.environ["TEST_DIR"])
 RESULT_DIR = Path(os.environ["RESULT_DIR"])
 
 
-def load_jsonl(path: Path) -> list[dict]:
-    rows = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
+def load_csv(path: Path) -> list[dict]:
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def row_to_guidance(row: dict) -> dict:
+    return {
+        "issue": row["issue"],
+        "propaganda_method": row["propaganda_method"],
+        "stance": {
+            "label": row["stance_label"],
+            "target": row["stance_target"],
+        },
+        "length_limit": row["length_limit"],
+    }
 
 
 def main():
-    files = sorted(glob.glob(str(TEST_DIR / "*.jsonl")))
+    files = sorted(glob.glob(str(TEST_DIR / "*.csv")))
     if not files:
-        raise FileNotFoundError(f"测试目录没有 jsonl: {TEST_DIR}")
+        raise FileNotFoundError(f"测试目录没有 csv: {TEST_DIR}")
 
-    cases = load_jsonl(Path(files[0]))
+    cases = load_csv(Path(files[0]))
     model = load_model(str(MODEL_DIR))
     preds = predict(model, cases)
 
@@ -42,7 +50,7 @@ def main():
     for case, pred in zip(cases, preds):
         generated_text = pred["generated_text"]
         result = evaluate_one(
-            guidance=case["guidance"],
+            guidance=row_to_guidance(case),
             generated_text=generated_text,
             method=method,
         )
